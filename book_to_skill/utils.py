@@ -522,6 +522,7 @@ def _is_non_chapter_section(title: str) -> bool:
         or bool(_PART_HEADER.match(normalized))
     )
 
+
 # ATX-style heading: "# Title", "## Section", AsciiDoc "= Title", "== Section".
 # The required space after the marker distinguishes an AsciiDoc "== X" from a
 # reStructuredText underline "=====" (no space) — the latter is intentionally
@@ -920,6 +921,114 @@ def _chapter_number(line: str, prev_line: str | None = None) -> int | None:
     return None
 
 
+def _line_title_text(line: str) -> str:
+    """Normalize a source line to its heading title, if any."""
+    stripped = line.strip()
+    match = _ATX_HEADING.match(stripped)
+    return match.group(2).strip() if match else stripped
+
+
+def _is_chapter_content_boundary(line: str) -> bool:
+    """True when *line* starts front/back matter or a part divider in the body."""
+    title = _line_title_text(line)
+    if not title:
+        return False
+    return _is_non_chapter_section(title)
+
+
+def _find_outline_title_line(lines: list[str], title: str, start: int) -> int | None:
+    """First line index at or after *start* whose title matches the outline entry."""
+    needle = title.strip().casefold()
+    for index in range(start, len(lines)):
+        if _line_title_text(lines[index]).casefold() == needle:
+            return index
+    return None
+
+
+def _first_chapter_boundary(lines: list[str], start: int, limit: int) -> int:
+    """Earliest line in [start, limit) that ends the preceding chapter body."""
+    for index in range(start, limit):
+        if _is_chapter_content_boundary(lines[index]):
+            return index
+    return limit
+
+
+def _split_chapter_contents_by_titles(
+    lines: list[str], chapter_titles: list[str]
+) -> list[tuple[str, str]]:
+    """Slice body text at outline chapter titles, stopping before framing sections."""
+    starts: list[tuple[str, int]] = []
+    cursor = 0
+    for title in chapter_titles:
+        line_index = _find_outline_title_line(lines, title, cursor)
+        if line_index is None:
+            break
+        starts.append((title, line_index))
+        cursor = line_index + 1
+    if not starts:
+        return []
+
+    segments: list[tuple[str, str]] = []
+    for index, (title, start_line) in enumerate(starts):
+        next_start = starts[index + 1][1] if index + 1 < len(starts) else len(lines)
+        end_line = _first_chapter_boundary(lines, start_line + 1, next_start)
+        body = "\n".join(lines[start_line + 1 : end_line]).strip()
+        segments.append((title, body))
+    return segments
+
+
+def _split_chapter_contents_by_scan(lines: list[str]) -> list[tuple[str, str]]:
+    """Chapter slices from heading lines, truncating before framing sections."""
+    fenced = _closed_fence_line_numbers(lines)
+    segments: list[tuple[str, str]] = []
+    current_heading: str | None = None
+    body: list[str] = []
+    prev = ""
+    for index, line in enumerate(lines):
+        if index in fenced:
+            if current_heading is not None:
+                body.append(line)
+            prev = ""
+            continue
+        if current_heading is not None and _is_chapter_content_boundary(line):
+            segments.append((current_heading, "\n".join(body).strip()))
+            current_heading = None
+            body = []
+        stripped = line.strip()
+        prev_for_match = prev if prev else None
+        if _chapter_number(stripped, prev_for_match) is not None:
+            if current_heading is not None:
+                segments.append((current_heading, "\n".join(body).strip()))
+            current_heading = stripped
+            body = []
+        elif current_heading is not None:
+            body.append(line)
+        prev = stripped if stripped else prev
+    if current_heading is not None:
+        end = len(body)
+        for offset, body_line in enumerate(body):
+            if _is_chapter_content_boundary(body_line):
+                end = offset
+                break
+        segments.append((current_heading, "\n".join(body[:end]).strip()))
+    return segments
+
+
+def split_chapter_contents(
+    text: str, *, chapter_titles: list[str] | None = None
+) -> list[tuple[str, str]]:
+    """Return [(heading, body)] slices for each detected chapter.
+
+    With *chapter_titles* from a PDF outline, bodies end before the next chapter
+    title or any conventional front/back-matter or part heading.
+    Without titles, falls back to scanning chapter-heading lines in the text.
+    """
+    lines = text.splitlines()
+    if chapter_titles:
+        return _split_chapter_contents_by_titles(lines, chapter_titles)
+    return _split_chapter_contents_by_scan(lines)
+
+
 def detect_structure(text: str) -> dict:
     """Detect chapter count and table of contents presence.
 
@@ -1029,6 +1138,7 @@ def apply_pdf_outline(structure: dict, pdf_path: str) -> dict:
         "chapters_detected": len(titles),
         "chapters_method": "outline",
         "chapter_headings_sample": titles[:10],
+        "chapter_titles": titles,
     }
 
 
@@ -1615,7 +1725,12 @@ def main():
         # The outline came from the file, not the text; a re-scan would lose it.
         src = extracted_sources[0]
         consolidated_structure.update(
-            {k: src[k] for k in ("chapters_detected", "chapters_method", "chapter_headings_sample")}
+            {k: src[k] for k in (
+                "chapters_detected",
+                "chapters_method",
+                "chapter_headings_sample",
+                "chapter_titles",
+            ) if k in src}
         )
     structural_sources = [
         src for src in extracted_sources
@@ -1686,6 +1801,11 @@ def main():
                 "chapters_detected": src["chapters_detected"],
                 "chapters_method": src["chapters_method"],
                 "chapter_headings_sample": src["chapter_headings_sample"],
+                **(
+                    {"chapter_titles": src["chapter_titles"]}
+                    if "chapter_titles" in src
+                    else {}
+                ),
                 "has_toc": src["has_toc"]
             }
             for src in extracted_sources

@@ -64,6 +64,7 @@ def test_outline_wins_over_numbered_lines(tmp_path):
     result = extract_single_file(pdf, "text", "never")
     assert result["chapters_method"] == "outline"
     assert result["chapter_headings_sample"] == ["Chapter 1", "Chapter 2", "Chapter 3"]
+    assert result["chapter_titles"] == ["Chapter 1", "Chapter 2", "Chapter 3"]
     assert result["chapters_detected"] == 3
 
 
