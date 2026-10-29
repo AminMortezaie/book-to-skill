@@ -158,6 +158,38 @@ def pdf_outline_titles(pdf_path: str) -> list[str]:
     return [t for t in titles if t]
 
 
+def pdf_outline_all_titles(pdf_path: str) -> list[str]:
+    """Every bookmark title from the PDF outline, in document order."""
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(pdf_path)
+        outline = reader.outline
+    except Exception:
+        return []
+    if not outline:
+        return []
+
+    def walk(items: list) -> list[str]:
+        titles: list[str] = []
+        index = 0
+        while index < len(items):
+            item = items[index]
+            if isinstance(item, list):
+                titles.extend(walk(item))
+                index += 1
+                continue
+            title = (getattr(item, "title", "") or "").strip()
+            if title:
+                titles.append(title)
+            index += 1
+            if index < len(items) and isinstance(items[index], list):
+                titles.extend(walk(items[index]))
+                index += 1
+        return titles
+
+    return walk(outline)
+
+
 def extract_with_pdfminer(pdf_path: str) -> str | None:
     try:
         from pdfminer.high_level import extract_text

@@ -45,6 +45,7 @@ from book_to_skill.parsers.pdf import (
     looks_image_only,
     count_pages,
     pdf_outline_titles,
+    pdf_outline_all_titles,
 )
 from book_to_skill.parsers.epub import (
     extract_with_ebooklib,
@@ -931,18 +932,15 @@ def _line_title_text(line: str) -> str:
 _TOC_LEADER = re.compile(r"\.{3,}")
 _PAGE_CHAPTER_HEADER = re.compile(r"^\d+\s*\|\s*Chapter\s+\d", re.IGNORECASE)
 _CHAPTER_MARKER = re.compile(r"^\s*CHAPTER\s+\d+\s*$", re.IGNORECASE)
-_RANGE_END_TITLES = frozenset(
-    {
-        "bibliography",
-        "references",
-        "works cited",
-        "index",
-        "glossary",
-        "colophon",
-        "about the author",
-        "about the authors",
-    }
-)
+_OUTLINE_CHAPTER_PREFIX = re.compile(r"^chapter\s+\d+[.:]?\s*", re.IGNORECASE)
+
+
+def _outline_bare_title(outline_title: str) -> str:
+    return _OUTLINE_CHAPTER_PREFIX.sub("", outline_title.strip(), count=1).strip()
+
+
+def _normalized_heading(line: str) -> str:
+    return _line_title_text(line).strip().rstrip(".").casefold()
 
 
 def _is_disqualified_chapter_line(line: str) -> bool:
@@ -956,53 +954,109 @@ def _is_disqualified_chapter_line(line: str) -> bool:
     return False
 
 
-def _find_outline_chapter_start(lines: list[str], title: str, start: int) -> int | None:
-    """0-based line index where the outline chapter begins in extracted text."""
-    needle = title.strip().casefold()
-    for index in range(start, len(lines)):
-        if _is_disqualified_chapter_line(lines[index]):
-            continue
-        if lines[index].strip().casefold() != needle:
-            continue
-        if index > 0 and _CHAPTER_MARKER.match(lines[index - 1].strip()):
-            return index - 1
-        return index
+def _chapter_start_at(lines: list[str], title_line: int) -> int:
+    if title_line > 0 and _CHAPTER_MARKER.match(lines[title_line - 1].strip()):
+        return title_line - 1
+    return title_line
+
+
+def _line_matches_outline_title(lines: list[str], index: int, outline_title: str) -> int | None:
+    """Return the 0-based start line if *outline_title* begins at *index*, else None."""
+    if _is_disqualified_chapter_line(lines[index]):
+        return None
+    bare = _outline_bare_title(outline_title)
+    full_cf = outline_title.strip().casefold()
+    bare_cf = bare.casefold()
+    line = lines[index].strip()
+    heading_cf = _normalized_heading(lines[index])
+
+    if heading_cf == bare_cf or heading_cf == full_cf or line.casefold() == bare_cf:
+        return _chapter_start_at(lines, index)
+
+    if index + 1 < len(lines) and not _is_disqualified_chapter_line(lines[index + 1]):
+        combined = f"{line} {lines[index + 1].strip()}".casefold()
+        if combined == bare_cf or combined == full_cf:
+            return _chapter_start_at(lines, index)
+
+    if _CHAPTER_MARKER.match(line):
+        for look in range(index + 1, min(index + 4, len(lines))):
+            if _is_disqualified_chapter_line(lines[look]):
+                continue
+            if _normalized_heading(lines[look]) == bare_cf:
+                return index
+            if look + 1 < len(lines) and not _is_disqualified_chapter_line(lines[look + 1]):
+                pair = f"{lines[look].strip()} {lines[look + 1].strip()}".casefold()
+                if pair == bare_cf:
+                    return index
     return None
 
 
-def _is_chapter_content_boundary(line: str) -> bool:
-    """True when *line* starts book- or part-level framing that ends a chapter body."""
-    stripped = line.strip()
+def _find_outline_chapter_start(lines: list[str], title: str, start: int) -> int | None:
+    """0-based line index where the outline chapter begins in extracted text."""
+    for index in range(start, len(lines)):
+        found = _line_matches_outline_title(lines, index, title)
+        if found is not None:
+            return found
+    return None
+
+
+def _is_isolated_heading_line(lines: list[str], index: int) -> bool:
+    if not lines[index].strip():
+        return False
+    prev_blank = index == 0 or not lines[index - 1].strip()
+    next_blank = index + 1 >= len(lines) or not lines[index + 1].strip()
+    return prev_blank and next_blank
+
+
+def _is_chapter_content_boundary(
+    lines: list[str], index: int, range_end_titles: frozenset[str]
+) -> bool:
+    """True when a book- or part-level framing heading ends the chapter body."""
+    stripped = lines[index].strip()
     if not stripped or _PAGE_CHAPTER_HEADER.match(stripped):
         return False
-    title = _line_title_text(line)
-    if not title:
-        return False
-    folded = title.casefold()
-    return (
-        folded in _RANGE_END_TITLES
-        or bool(_PART_HEADER.match(title))
-        or bool(_NON_CHAPTER_PREFIX.match(title))
-    )
+    heading_cf = _normalized_heading(lines[index])
+    if heading_cf in range_end_titles:
+        return True
+    title = _line_title_text(lines[index])
+    if _PART_HEADER.match(title) or _NON_CHAPTER_PREFIX.match(title):
+        return _is_isolated_heading_line(lines, index)
+    return False
 
 
-def _first_chapter_boundary(lines: list[str], start: int, limit: int) -> int:
+def _first_chapter_boundary(
+    lines: list[str], start: int, limit: int, range_end_titles: frozenset[str]
+) -> int:
     """Earliest line in [start, limit) that ends the preceding chapter body."""
     for index in range(start, limit):
-        if _is_chapter_content_boundary(lines[index]):
+        if _is_chapter_content_boundary(lines, index, range_end_titles):
             return index
     return limit
 
 
-def chapter_line_ranges(text: str, chapter_titles: list[str]) -> list[dict[str, int | str]]:
+def _range_end_title_keys(titles: list[str]) -> frozenset[str]:
+    return frozenset(_normalized_heading(title) for title in titles if title.strip())
+
+
+def chapter_line_ranges(
+    text: str,
+    chapter_titles: list[str],
+    *,
+    range_end_titles: list[str] | None = None,
+) -> list[dict[str, int | str]]:
     """1-based inclusive line ranges for outline chapters in *text*."""
     lines = text.splitlines()
+    end_keys = _range_end_title_keys(range_end_titles or [])
     starts: list[tuple[str, int]] = []
     cursor = 0
     for title in chapter_titles:
         line_index = _find_outline_chapter_start(lines, title, cursor)
         if line_index is None:
-            break
+            print(
+                f"WARNING: outline chapter not found in extracted text: {title!r}",
+                file=sys.stderr,
+            )
+            continue
         starts.append((title, line_index))
         cursor = line_index + 1
     if not starts:
@@ -1011,7 +1065,9 @@ def chapter_line_ranges(text: str, chapter_titles: list[str]) -> list[dict[str, 
     ranges: list[dict[str, int | str]] = []
     for index, (title, start_line) in enumerate(starts):
         next_start = starts[index + 1][1] if index + 1 < len(starts) else len(lines)
-        end_exclusive = _first_chapter_boundary(lines, start_line + 1, next_start)
+        end_exclusive = _first_chapter_boundary(
+            lines, start_line + 1, next_start, end_keys
+        )
         ranges.append(
             {
                 "title": title,
@@ -1126,12 +1182,15 @@ def apply_pdf_outline(structure: dict, pdf_path: str) -> dict:
     titles = [t for t in pdf_outline_titles(pdf_path) if not _is_non_chapter_section(t)]
     if len(titles) < 2:
         return structure
+    all_titles = pdf_outline_all_titles(pdf_path)
+    range_end_titles = [t for t in all_titles if _is_non_chapter_section(t)]
     return {
         **structure,
         "chapters_detected": len(titles),
         "chapters_method": "outline",
         "chapter_headings_sample": titles[:10],
         "chapter_titles": titles,
+        "chapter_range_end_titles": range_end_titles,
     }
 
 
@@ -1727,8 +1786,11 @@ def main():
         )
         chapter_titles = src.get("chapter_titles")
         if chapter_titles:
+            end_titles = src.get("chapter_range_end_titles")
             consolidated_structure["chapter_ranges"] = chapter_line_ranges(
-                consolidated_text, chapter_titles
+                consolidated_text,
+                chapter_titles,
+                range_end_titles=end_titles,
             )
     structural_sources = [
         src for src in extracted_sources
@@ -1807,7 +1869,9 @@ def main():
                 **(
                     {
                         "chapter_ranges": chapter_line_ranges(
-                            src["text"], src["chapter_titles"]
+                            src["text"],
+                            src["chapter_titles"],
+                            range_end_titles=src.get("chapter_range_end_titles"),
                         )
                     }
                     if "chapter_titles" in src

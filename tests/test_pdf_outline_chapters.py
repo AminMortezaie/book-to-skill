@@ -6,11 +6,16 @@ lists 14. The outline is preferred; the heuristics remain the fallback.
 """
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import pytest
 
 pypdf = pytest.importorskip("pypdf")
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from book_to_skill.utils import extract_single_file  # noqa: E402
 
@@ -74,3 +79,58 @@ def test_no_outline_falls_back_to_heuristics(tmp_path):
     result = extract_single_file(pdf, "text", "never")
     assert result["chapters_method"] == "numeric"
     assert result["chapters_detected"] == 5
+
+
+def test_outline_chapter_ranges_in_extracted_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "book_to_skill.pdf_inspector_integration.inspect_pdf",
+        lambda _path: (None, None),
+    )
+    pdf = tmp_path / "book.pdf"
+    body = [
+        "CHAPTER 1",
+        "Alpha",
+        "body-one",
+        "CHAPTER 2",
+        "Beta",
+        "body-two",
+        "Part I Conclusion",
+        "part-tail",
+    ]
+    _text_pdf(pdf, body)
+    writer = pypdf.PdfWriter(clone_from=str(pdf))
+    writer.add_outline_item("Chapter 1. Alpha", 0)
+    writer.add_outline_item("Chapter 2. Beta", 0)
+    writer.add_outline_item("Part I Conclusion", 0)
+    with open(pdf, "wb") as handle:
+        writer.write(handle)
+
+    workdir = tmp_path / "out"
+    monkeypatch.setenv("BOOK_SKILL_WORKDIR", str(workdir))
+    import book_to_skill.config as config
+    import book_to_skill.utils as utils_module
+    monkeypatch.setattr(config, "OUTPUT_DIR", workdir)
+    monkeypatch.setattr(config, "OUTPUT_TEXT", workdir / "full_text.txt")
+    monkeypatch.setattr(config, "OUTPUT_META", workdir / "metadata.json")
+    monkeypatch.setattr(utils_module, "OUTPUT_DIR", workdir)
+    monkeypatch.setattr(utils_module, "OUTPUT_TEXT", workdir / "full_text.txt")
+    monkeypatch.setattr(utils_module, "OUTPUT_META", workdir / "metadata.json")
+
+    from book_to_skill.pdf_inspector_integration import install_pdf_inspector_hook
+
+    install_pdf_inspector_hook()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["extract", str(pdf), "--mode", "text", "--install-missing", "no"],
+    )
+    utils_module.main()
+    metadata = json.loads((workdir / "metadata.json").read_text(encoding="utf-8"))
+    ranges = metadata["chapter_ranges"]
+    assert len(ranges) == 2
+    assert ranges[0]["title"] == "Chapter 1. Alpha"
+    full_text = (workdir / "full_text.txt").read_text(encoding="utf-8").splitlines()
+    assert full_text[ranges[0]["end_line"]].startswith("CHAPTER 2")
+    assert full_text[ranges[1]["end_line"]].startswith("Part I Conclusion")
+    assert "body-one" in "\n".join(full_text[ranges[0]["start_line"] - 1 : ranges[0]["end_line"]])
