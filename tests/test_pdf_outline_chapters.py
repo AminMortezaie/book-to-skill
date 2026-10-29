@@ -45,6 +45,7 @@ def _text_pdf(path: Path, lines: list[str]) -> None:
 
 def _add_outline(path: Path) -> None:
     writer = pypdf.PdfWriter(clone_from=str(path))
+    writer.add_outline_item("Cover", 0)
     writer.add_outline_item("Preface", 0)
     for part, chapters in (("Part I. Storage", ["Chapter 1", "Chapter 2"]),
                            ("Part II. Distribution", ["Chapter 3"])):

@@ -483,6 +483,7 @@ _TOC_PATTERN = re.compile(
 # front/back matter; instructional titles such as "Indexing Strategies" and
 # "Glossary of Terms" must remain chapters.
 _FRONT_MATTER_HEADERS = (
+    "cover",
     "preface",
     "foreword",
     "acknowledgements",
