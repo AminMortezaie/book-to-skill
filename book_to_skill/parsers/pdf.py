@@ -130,6 +130,34 @@ def extract_with_pypdf(pdf_path: str) -> str | None:
         return None
 
 
+def pdf_outline_titles(pdf_path: str) -> list[str]:
+    """Top-level titles from the PDF's embedded outline (bookmarks), or [] when
+    there is none or pypdf is unavailable. A top-level entry with children that
+    is a "Part" is replaced by its children, so "Part I > Chapter 1..7" yields
+    the chapters, not the parts."""
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(pdf_path)
+        outline = reader.outline
+    except Exception:
+        return []
+    from book_to_skill.utils import _PART_HEADER
+
+    titles = []
+    for index, item in enumerate(outline):
+        if isinstance(item, list):
+            continue  # children of the preceding entry
+        title = (getattr(item, "title", "") or "").strip()
+        children = outline[index + 1] if index + 1 < len(outline) else None
+        if _PART_HEADER.match(title) and isinstance(children, list):
+            titles.extend(
+                (c.title or "").strip() for c in children if not isinstance(c, list)
+            )
+        elif title:
+            titles.append(title)
+    return [t for t in titles if t]
+
+
 def extract_with_pdfminer(pdf_path: str) -> str | None:
     try:
         from pdfminer.high_level import extract_text

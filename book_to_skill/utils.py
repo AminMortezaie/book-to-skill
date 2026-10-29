@@ -44,6 +44,7 @@ from book_to_skill.parsers.pdf import (
     extract_with_pdfminer,
     looks_image_only,
     count_pages,
+    pdf_outline_titles,
 )
 from book_to_skill.parsers.epub import (
     extract_with_ebooklib,
@@ -1010,6 +1011,26 @@ def detect_structure(text: str) -> dict:
     }
 
 
+def apply_pdf_outline(structure: dict, pdf_path: str) -> dict:
+    """Prefer the PDF's embedded outline over the text heuristics.
+
+    The text scan treats any short line starting with a number and two spaces
+    ("1  Introduction") as a chapter heading, so page-layout lines such as
+    numbered figure/listing captions and ToC rows inflate a technical book to
+    hundreds of "chapters". A publisher outline is authoritative; the
+    heuristics remain the fallback when the PDF has none.
+    """
+    titles = [t for t in pdf_outline_titles(pdf_path) if not _is_non_chapter_section(t)]
+    if len(titles) < 2:
+        return structure
+    return {
+        **structure,
+        "chapters_detected": len(titles),
+        "chapters_method": "outline",
+        "chapter_headings_sample": titles[:10],
+    }
+
+
 def parse_arguments(argv: list[str]) -> tuple[list[str], str, str]:
     """Parse argv into (input_paths, extraction_mode, install_mode)."""
     input_paths = []
@@ -1408,6 +1429,8 @@ def extract_single_file(input_path: Path, extraction_mode: str, install_mode: st
 
     tokens = estimate_tokens(text)
     structure = detect_structure(text)
+    if ext == ".pdf":
+        structure = apply_pdf_outline(structure, input_str)
     print(
         f"  chapters: {structure['chapters_detected']} "
         f"({structure['chapters_method']})"
@@ -1587,6 +1610,12 @@ def main():
     # headings and make the result depend on the source-path length.
     structure_text = "\n\n".join(src["text"] for src in extracted_sources)
     consolidated_structure = detect_structure(structure_text)
+    if len(extracted_sources) == 1 and extracted_sources[0]["chapters_method"] == "outline":
+        # The outline came from the file, not the text; a re-scan would lose it.
+        src = extracted_sources[0]
+        consolidated_structure.update(
+            {k: src[k] for k in ("chapters_detected", "chapters_method", "chapter_headings_sample")}
+        )
     structural_sources = [
         src for src in extracted_sources
         if src["chapters_method"] == "structural" and src["chapters_detected"] >= 2
