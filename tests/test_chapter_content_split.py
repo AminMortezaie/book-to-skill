@@ -1,8 +1,8 @@
-"""Chapter bodies must not swallow part conclusions or back matter."""
+"""Outline chapter_ranges trim part conclusions and back matter."""
 
 from __future__ import annotations
 
-from book_to_skill.utils import split_chapter_contents
+from book_to_skill.utils import chapter_line_ranges
 
 _FILLER = "x" * 5000
 
@@ -10,6 +10,7 @@ _FILLER = "x" * 5000
 def _database_internals_fixture() -> tuple[str, list[str]]:
     lines: list[str] = []
     for number in range(1, 15):
+        lines.append(f"CHAPTER {number}")
         lines.append(f"Chapter {number}")
         lines.append(f"body-{number}")
         if number == 7:
@@ -32,54 +33,29 @@ def _database_internals_fixture() -> tuple[str, list[str]]:
     return "\n".join(lines), titles
 
 
-def _naive_outline_split(text: str, chapter_titles: list[str]) -> dict[str, str]:
-    """Previous behavior: slice only at the next outline title (no back-matter cut)."""
-    lines = text.splitlines()
-    starts: list[tuple[str, int]] = []
-    cursor = 0
-    for title in chapter_titles:
-        needle = title.casefold()
-        found = None
-        for index in range(cursor, len(lines)):
-            if lines[index].strip().casefold() == needle:
-                found = index
-                break
-        if found is None:
-            break
-        starts.append((title, found))
-        cursor = found + 1
-    bodies: dict[str, str] = {}
-    for index, (title, start) in enumerate(starts):
-        end = starts[index + 1][1] if index + 1 < len(starts) else len(lines)
-        bodies[title] = "\n".join(lines[start + 1 : end])
-    return bodies
-
-
-def test_part_conclusions_and_back_matter_are_excluded_from_chapter_bodies():
+def test_chapter_ranges_stop_before_part_conclusions_and_back_matter():
     text, titles = _database_internals_fixture()
-    before = _naive_outline_split(text, titles)
-    after = dict(split_chapter_contents(text, chapter_titles=titles))
-
-    ch7, ch14 = "Chapter 7", "Chapter 14"
-    assert len(before[ch7]) > len(after[ch7]) + len(_FILLER)
-    assert len(before[ch14]) > len(after[ch14]) + 2 * len(_FILLER)
-    assert after[ch7] == "body-7"
-    assert after[ch14] == "body-14"
-    assert "part1-conclusion" not in after[ch7]
-    assert "bib-content" not in after[ch14]
-    assert "index-content" not in after[ch14]
+    ranges = chapter_line_ranges(text, titles)
+    by_title = {entry["title"]: entry for entry in ranges}
+    ch7 = by_title["Chapter 7"]
+    ch14 = by_title["Chapter 14"]
+    lines = text.splitlines()
+    assert lines[ch7["end_line"]].startswith("Part I Conclusion")
+    assert lines[ch14["end_line"]].startswith("Part II Conclusion")
+    assert "Part I Conclusion" not in lines[ch7["start_line"] - 1 : ch7["end_line"]]
+    assert "Bibliography" not in lines[ch14["start_line"] - 1 : ch14["end_line"]]
 
 
-def test_scan_fallback_trims_final_chapter_back_matter():
+def test_page_headers_and_toc_leaders_do_not_start_chapters():
     text = "\n".join(
         [
-            "Chapter 1",
-            "intro",
-            "Chapter 2",
-            "middle",
-            "Bibliography",
-            "refs",
+            "  1. Introduction and Overview. . . . . . . . . . . . . . . . . 7",
+            "806 | Chapter 1: Introduction and Overview",
+            "                                                                        CHAPTER 1",
+            "                                 Introduction and Overview",
+            "body",
         ]
     )
-    segments = split_chapter_contents(text)
-    assert segments[-1] == ("Chapter 2", "middle")
+    ranges = chapter_line_ranges(text, ["Introduction and Overview"])
+    assert len(ranges) == 1
+    assert ranges[0]["start_line"] == 3

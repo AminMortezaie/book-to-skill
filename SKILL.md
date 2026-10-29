@@ -460,7 +460,7 @@ If a chapter genuinely has no worked example and resists expansion, let it land 
 
 For EACH chapter/major section identified in Step 3:
 
-Read the corresponding section of the extracted `full_text.txt` (use character offsets or grep for chapter headings).
+Read the corresponding section of the extracted `full_text.txt` using `chapter_ranges` from `metadata.json` when present (`start_line`/`end_line` are 1-based inclusive, for `sed`/`Read`); otherwise grep for chapter headings.
 
 Create `$SKILLS_HOME/<skill_name>/chapters/ch<NN>-<slug>.md` using the structure below.
 
