@@ -610,6 +610,7 @@ the relevant chapter file before answering.
 - [glossary.md](glossary.md) — all key terms with definitions
 - [patterns.md](patterns.md) — all techniques and design patterns
 - [cheatsheet.md](cheatsheet.md) — quick reference tables and decision guides
+- Full text: `<output_text from metadata.json>` — grep it for depth the chapter files omit (local extraction, not shipped)
 
 ---
 
