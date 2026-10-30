@@ -38,6 +38,7 @@ from book_to_skill.parsers.docx import extract_docx
 from book_to_skill.parsers.rtf import extract_rtf
 from book_to_skill.parsers.calibre import extract_with_ebook_convert
 from book_to_skill.parsers.pdf import (
+    _PART_HEADER,
     extract_with_docling,
     extract_with_pdftotext,
     extract_with_pypdf,
@@ -510,7 +511,6 @@ _BACK_MATTER_HEADERS = (
 )
 _NON_CHAPTER_HEADERS = frozenset((*_FRONT_MATTER_HEADERS, *_BACK_MATTER_HEADERS))
 _NON_CHAPTER_PREFIX = re.compile(r"^(?:appendix|appendices)\b", re.IGNORECASE)
-_PART_HEADER = re.compile(r"^part\s+(?:\d+|[ivxlcdm]+)\b", re.IGNORECASE)
 
 
 def _is_non_chapter_section(title: str) -> bool:

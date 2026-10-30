@@ -7,6 +7,8 @@ import subprocess
 import sys
 from collections import Counter
 
+_PART_HEADER = re.compile(r"^part\s+(?:\d+|[ivxlcdm]+)\b", re.IGNORECASE)
+
 # A bare page number sitting alone on a line: Arabic, or a Roman numeral of the
 # kind used to number front matter.
 #
@@ -141,8 +143,6 @@ def pdf_outline_titles(pdf_path: str) -> list[str]:
         outline = reader.outline
     except Exception:
         return []
-    from book_to_skill.utils import _PART_HEADER
-
     titles = []
     for index, item in enumerate(outline):
         if isinstance(item, list):

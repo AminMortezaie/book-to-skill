@@ -17,7 +17,7 @@ pypdf = pytest.importorskip("pypdf")
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from book_to_skill.utils import extract_single_file  # noqa: E402
+import book_to_skill.utils as utils  # noqa: E402
 
 # Body text the heuristic scan counts as 5 chapters.
 _LINES = [f"Chapter {n}" for n in range(1, 6)]
@@ -31,8 +31,10 @@ def _text_pdf(path: Path, lines: list[str]) -> None:
     objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        ),
         b"<< /Length %d >>\nstream\n" % len(ops) + ops + b"endstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
@@ -66,7 +68,7 @@ def test_outline_wins_over_numbered_lines(tmp_path):
     pdf = tmp_path / "book.pdf"
     _text_pdf(pdf, _LINES)
     _add_outline(pdf)
-    result = extract_single_file(pdf, "text", "never")
+    result = utils.extract_single_file(pdf, "text", "never")
     assert result["chapters_method"] == "outline"
     assert result["chapter_headings_sample"] == ["Chapter 1", "Chapter 2", "Chapter 3"]
     assert result["chapter_titles"] == ["Chapter 1", "Chapter 2", "Chapter 3"]
@@ -76,7 +78,7 @@ def test_outline_wins_over_numbered_lines(tmp_path):
 def test_no_outline_falls_back_to_heuristics(tmp_path):
     pdf = tmp_path / "book.pdf"
     _text_pdf(pdf, _LINES)
-    result = extract_single_file(pdf, "text", "never")
+    result = utils.extract_single_file(pdf, "text", "never")
     assert result["chapters_method"] == "numeric"
     assert result["chapters_detected"] == 5
 
@@ -108,13 +110,12 @@ def test_outline_chapter_ranges_in_extracted_metadata(tmp_path, monkeypatch):
     workdir = tmp_path / "out"
     monkeypatch.setenv("BOOK_SKILL_WORKDIR", str(workdir))
     import book_to_skill.config as config
-    import book_to_skill.utils as utils_module
     monkeypatch.setattr(config, "OUTPUT_DIR", workdir)
     monkeypatch.setattr(config, "OUTPUT_TEXT", workdir / "full_text.txt")
     monkeypatch.setattr(config, "OUTPUT_META", workdir / "metadata.json")
-    monkeypatch.setattr(utils_module, "OUTPUT_DIR", workdir)
-    monkeypatch.setattr(utils_module, "OUTPUT_TEXT", workdir / "full_text.txt")
-    monkeypatch.setattr(utils_module, "OUTPUT_META", workdir / "metadata.json")
+    monkeypatch.setattr(utils, "OUTPUT_DIR", workdir)
+    monkeypatch.setattr(utils, "OUTPUT_TEXT", workdir / "full_text.txt")
+    monkeypatch.setattr(utils, "OUTPUT_META", workdir / "metadata.json")
 
     from book_to_skill.pdf_inspector_integration import install_pdf_inspector_hook
 
@@ -125,7 +126,7 @@ def test_outline_chapter_ranges_in_extracted_metadata(tmp_path, monkeypatch):
         "argv",
         ["extract", str(pdf), "--mode", "text", "--install-missing", "no"],
     )
-    utils_module.main()
+    utils.main()
     metadata = json.loads((workdir / "metadata.json").read_text(encoding="utf-8"))
     ranges = metadata["chapter_ranges"]
     assert len(ranges) == 2
